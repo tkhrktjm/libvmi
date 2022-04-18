@@ -132,65 +132,78 @@ _exit:
     return ret;
 }
 
-#define PSR_MODE_BIT 0x10 // set on cpsr iff ARM32
+#define PSR_MODE_BIT 0x10 // set on cpsr if ARM32
 static status_t get_vcpu_page_mode_arm(vmi_instance_t vmi, unsigned long vcpu, page_mode_t *out_pm)
 {
-    //Note: this will need to be a more comprehensive check when we start supporting AArch64
+    // Note: this will need to be a more comprehensive check when we start supporting AArch64
     status_t ret = VMI_FAILURE;
     page_mode_t pm = VMI_PM_UNKNOWN;
 
     reg_t cpsr;
-    if (VMI_SUCCESS == driver_get_vcpureg(vmi, &cpsr, CPSR, vcpu)) {
-        if (cpsr & PSR_MODE_BIT) {
-            pm = VMI_PM_AARCH32;
-            dbprint(VMI_DEBUG_PTLOOKUP, "Found ARM32 pagemode\n");
-        } else {
-            /* See ARM ARMv8-A D7.2.84 TCR_EL1, Translation Control Register (EL1) */
-            reg_t tcr_el1;
-            if ( VMI_SUCCESS == driver_get_vcpureg(vmi, &tcr_el1, TCR_EL1, vcpu)) {
-                vmi->arm64.t0sz = tcr_el1 & VMI_BIT_MASK(0,5);
-                vmi->arm64.t1sz = (tcr_el1 & VMI_BIT_MASK(16,21)) >> 16;
-                switch ((tcr_el1 & VMI_BIT_MASK(14,15)) >> 14) {
-                    case 0b00:
-                        vmi->arm64.tg0 = VMI_PS_4KB;
-                        break;
-                    case 0b01:
-                        vmi->arm64.tg0 = VMI_PS_64KB;
-                        break;
-                    case 0b10:
-                        vmi->arm64.tg0 = VMI_PS_16KB;
-                        break;
-                };
-                switch ((tcr_el1 & VMI_BIT_MASK(30,31)) >> 30) {
-                    case 0b01:
-                        vmi->arm64.tg1 = VMI_PS_16KB;
-                        break;
-                    case 0b10:
-                        vmi->arm64.tg1 = VMI_PS_4KB;
-                        break;
-                    case 0b11:
-                        vmi->arm64.tg1 = VMI_PS_64KB;
-                        break;
-                };
-            }
+    if (VMI_FAILURE == driver_get_vcpureg(vmi, &cpsr, CPSR, vcpu)) {
+        goto _exit;
+    }
 
-            pm = VMI_PM_AARCH64;
-            dbprint(VMI_DEBUG_PTLOOKUP,
-                    "Found ARM64 pagemode. TTBR0 VA width: %u Page size: %u TTBR1 VA width:%u Page size: %u\n",
-                    64-vmi->arm64.t0sz, vmi->arm64.tg0,
-                    64-vmi->arm64.t1sz, vmi->arm64.tg1);
+    if (cpsr & PSR_MODE_BIT) {
+        pm = VMI_PM_AARCH32;
+        dbprint(VMI_DEBUG_PTLOOKUP, "Found ARM32 pagemode\n");
+    } else {
+        /* See ARM ARMv8-A D7.2.84 TCR_EL1, Translation Control Register (EL1) */
+        reg_t tcr_el1;
+        if (VMI_FAILURE == driver_get_vcpureg(vmi, &tcr_el1, TCR_EL1, vcpu)) {
+            goto _exit;
         }
 
-        ret = VMI_SUCCESS;
+        vmi->arm64.t0sz = tcr_el1 & VMI_BIT_MASK(0, 5);
+        vmi->arm64.t1sz = (tcr_el1 & VMI_BIT_MASK(16, 21)) >> 16;
+        switch ((tcr_el1 & VMI_BIT_MASK(14, 15)) >> 14) {
+        case 0b00:
+            vmi->arm64.tg0 = VMI_PS_4KB;
+            break;
+        case 0b01:
+            vmi->arm64.tg0 = VMI_PS_64KB;
+            break;
+        case 0b10:
+            vmi->arm64.tg0 = VMI_PS_16KB;
+            break;
+        default:
+            vmi->arm64.tg0 = VMI_PS_UNKNOWN;
+            break;
+        };
+        switch ((tcr_el1 & VMI_BIT_MASK(30, 31)) >> 30) {
+        case 0b01:
+            vmi->arm64.tg1 = VMI_PS_16KB;
+            break;
+        case 0b10:
+            vmi->arm64.tg1 = VMI_PS_4KB;
+            break;
+        case 0b11:
+            vmi->arm64.tg1 = VMI_PS_64KB;
+            break;
+        default:
+            vmi->arm64.tg1 = VMI_PS_UNKNOWN;
+            break;
+        };
+
+        if (vmi->arm64.tg0 == VMI_PS_UNKNOWN && vmi->arm64.tg1 == VMI_PS_UNKNOWN) {
+            goto _exit;
+        }
+
+        pm = VMI_PM_AARCH64;
+        dbprint(VMI_DEBUG_PTLOOKUP,
+                "Found ARM64 pagemode. TTBR0 VA width: %u Page size: %u TTBR1 VA width:%u Page size: %u\n",
+                64 - vmi->arm64.t0sz, vmi->arm64.tg0, 64 - vmi->arm64.t1sz, vmi->arm64.tg1);
     }
 
-    if ( VMI_SUCCESS == ret ) {
-        if ( out_pm )
-            *out_pm = pm;
-        else
-            vmi->page_mode = pm;
+    if (out_pm) {
+        *out_pm = pm;
+    } else {
+        vmi->page_mode = pm;
     }
 
+    ret = VMI_SUCCESS;
+
+_exit:
     return ret;
 }
 
